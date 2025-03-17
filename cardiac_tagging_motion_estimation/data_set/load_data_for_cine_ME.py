@@ -30,14 +30,10 @@ def load_np_mask_array_from_npz(npz_file):
     np_arrs = []
     for np_file in npz.keys(): np_arrs.append(npz[np_file])
     A = np_arrs[0]
-    t,y,x = A.shape
-    extra_t = t - 27
-    B = np.zeros((27, y, x))
-    if extra_t > 0:
-        B[0:22,::] = A[0:22,::]
-        B[-5:, ::] = A[-5:,::]
-    else:
-        B = A
+    t, y, x = A.shape
+    # Adjust this part to handle 20 frames instead of 27
+    B = np.zeros((20, y, x))  # Assuming you want to keep all 20 frames
+    B = A[:20]  # Just take the first 20 frames
     return [B]
 
 # # --------------------------------------------------------------------------------------------
@@ -239,15 +235,14 @@ class load_Dataset(Dataset):
     """
     load training/validation/test data set to the torch Dataset
     """
-    def __init__(self, cines, tags):
-        self.cine = cines
+    def __init__(self, tags):
         self.tag = tags
 
     def __getitem__(self, item):
-        return self.cine[item], self.tag[item]
+        return self.tag[item]
 
     def __len__(self):
-        return len(self.cine)
+        return len(self.tag)
 
 
 if __name__ == '__main__':

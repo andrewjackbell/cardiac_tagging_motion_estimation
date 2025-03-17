@@ -1,8 +1,18 @@
 import sys
-sys.path.append("..")
+import os, json
+import numpy as np
+
+# Get absolute paths
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(current_dir)  # Parent of current directory
+
+# Add root to path
+sys.path.append(root_dir)
+
+import matplotlib.pyplot as plt
+
 
 import torch
-import os, json
 from ME_nets.LagrangianMotionEstimationNet import Lagrangian_motion_estimate_net
 from data_set.load_data_for_cine_ME import add_np_data, get_np_data_as_groupids,load_np_datagroups, DataType, \
     load_Dataset
@@ -19,42 +29,21 @@ def load_dec_weights(model, weights):
     return model
 
 def test_Cardiac_Tagging_ME_net(net, \
-                                np_data_root, \
-                                val_dataset_files, \
+                                data_dir, \
                                 model_path, \
                                 dst_root, \
                                 case = 'proposed'):
-    with open(val_dataset_files, 'r', encoding='utf-8') as f_json:
-        data_config = json.load(f_json)
-    if data_config is not None and data_config.__class__ is dict:
-        grouped_data_sets = data_config.get('test')
-        if grouped_data_sets.__class__ is not dict: print('invalid train_config.')
 
-    # check grouped_data_sets
-    if grouped_data_sets.__class__ is not dict: print('invalid data config file.')
+    tag_set = 'dataset_test_80.npz'
 
-    group_names = grouped_data_sets.keys()
-    val_data_list = []
-    for group_name in group_names:
-        print('working on %s', group_name)
-        filesListDict = grouped_data_sets.get(group_name)
-        if filesListDict.__class__ is not dict: continue
+    validation_set = np.load(os.path.join(data_dir,tag_set))['arr_0']
 
-        for sample in filesListDict.keys():
-            each_trainingSets = filesListDict.get(sample)
-            # list images_data_niix in each dataset
-            cine_npz = each_trainingSets.get('cine')
-            val_data_list.append(cine_npz)
-
-    validation_data_group_ids = get_np_data_as_groupids(model_root=np_data_root, data_type=DataType.VALIDATION)
-    validation_cines, validation_tags  = load_np_datagroups(np_data_root, validation_data_group_ids,
-                                                                           data_type=DataType.VALIDATION)
-    val_dataset = load_Dataset(validation_cines, validation_tags)
+    val_dataset = load_Dataset(validation_set)
     val_batch_size = 1
     test_set_loader = torch.utils.data.DataLoader(dataset=val_dataset, batch_size=val_batch_size, shuffle=False)
     if not os.path.exists(dst_root): os.makedirs(dst_root)
     if case == 'proposed':
-        model = '/pro_new_model.pth'
+        model = '/end_model.pth'
     else:
         model = '/baseline_model.pth'
     ME_model = load_dec_weights(net, model_path + model)
@@ -63,7 +52,7 @@ def test_Cardiac_Tagging_ME_net(net, \
 
     for i, data in enumerate(test_set_loader):
         # cine0, tag = data
-        untagged_cine, tagged_cine = data
+        tagged_cine = data
 
         # wrap input data in a Variable object
         cine0 = tagged_cine.to(device)
@@ -75,7 +64,7 @@ def test_Cardiac_Tagging_ME_net(net, \
         img = img.float()
 
         x = img[:, 1:, ::]  # other frames except the 1st frame
-        y = img[:, 0:24, ::]  # 1st frame also is the reference frame
+        y = img[:, 0:17, ::]  # 1st frame also is the reference frame
         shape = x.shape  # batch_size, seq_length, height, width
         seq_length = shape[1]
         height = shape[2]
@@ -97,90 +86,55 @@ def test_Cardiac_Tagging_ME_net(net, \
             val_registered_cine1, val_registered_cine2, val_registered_cine_lag, val_flow_param, \
             val_deformation_matrix, val_deformation_matrix_neg, val_deformation_matrix_lag = net(y, x)
 
-        y = img[:, -1, ::]  # the last frame
+        # visualise the results
 
-        val_deformation_matrix_lag0 = torch.cat((val_deformation_matrix_lag[:,0,::], y), dim=0)
-        val_deformation_matrix_lag0 = val_deformation_matrix_lag0.cuda()
-        val_deformation_matrix_lag0 = val_deformation_matrix_lag0.cpu().detach().numpy()
-        # val_deformation_matrix_lag0 = val_deformation_matrix_lag0.squeeze(0)
+        print("Shapes:")
+        print("val_registered_cine1: ", val_registered_cine1.shape) # [B, 1, H, W]
+        print("val_registered_cine2: ", val_registered_cine2.shape) # [B, 1, H, W]
+        print("val_registered_cine_lag: ", val_registered_cine_lag.shape) # [B, 1, H, W]
+        print("val_flow_param: ", val_flow_param.shape) # [B, 4, H, W]
+        print("val_deformation_matrix: ", val_deformation_matrix.shape) # [B, 2, H, W]
+        print("val_deformation_matrix_neg: ", val_deformation_matrix_neg.shape) # [B, 2, H, W]
+        print("val_deformation_matrix_lag: ", val_deformation_matrix_lag.shape) # [B, 2, H, W]
 
-        val_deformation_matrix_lag1 = torch.cat((val_deformation_matrix_lag[:, 1, ::], y), dim=0)
-        val_deformation_matrix_lag1 = val_deformation_matrix_lag1.cuda()
-        val_deformation_matrix_lag1 = val_deformation_matrix_lag1.cpu().detach().numpy()
-        # val_deformation_matrix_lag1 = val_deformation_matrix_lag1.squeeze(0)
+        # compare registered cines with the ground truth
 
+        # cine1
 
-        file_path = val_data_list[i][0]
-        root_vec = file_path.split(os.path.sep)
-        tgt_root1 = os.path.join(dst_root, root_vec[-5])
-        if not os.path.exists(tgt_root1): os.mkdir(tgt_root1)
-        tgt_root2 = os.path.join(tgt_root1, root_vec[-3])
-        if not os.path.exists(tgt_root2): os.mkdir(tgt_root2)
-        tgt_root3 = os.path.join(tgt_root2, root_vec[-2])
-        if not os.path.exists(tgt_root3): os.mkdir(tgt_root3)
+        cine1 = cine1.cpu()
+        val_registered_cine1 = val_registered_cine1.cpu()
+        
+        plt.figure()
+        plt.subplot(1, 2, 1)
+        plt.imshow(val_registered_cine1[8, 0, :, :], cmap='gray')
+        plt.title('Registered Cine1')
+        plt.subplot(1, 2, 2)
+        plt.imshow(cine1[0, 8, :, :], cmap='gray')
+        plt.title('Ground Truth Cine1')
 
+        mse = ((val_registered_cine1[8, 0, :, :] - cine1[0, 8, :, :]) ** 2).mean()
+        print("MSE Cine1: ", mse)
 
-        val_img_file_root = file_path.replace('cine.npz', '')
+        plt.show()
 
-        val_cine_file = ''
-        for subroot, dirs, files in os.walk(val_img_file_root):
-            if len(files) < 4: continue
-            for file in files:
-                if file.endswith('.nii.gz') and 'CINE' in file and 'TAG' in file:
-                    val_cine_file = file
-                    break
-
-        cine_image = sitk.ReadImage(os.path.join(val_img_file_root, val_cine_file))
-        spacing1 = cine_image.GetSpacing()
-        origin1 = cine_image.GetOrigin()
-        direction1 = cine_image.GetDirection()
-
-        img_matrix = sitk.GetArrayFromImage(cine_image)
-        cine_img = sitk.GetImageFromArray(img_matrix[2:,::])
-        cine_img.SetSpacing(spacing1)
-        cine_img.SetDirection(direction1)
-        cine_img.SetOrigin(origin1)
-        sitk.WriteImage(cine_img, os.path.join(tgt_root3, val_cine_file))
-
-
-        val_deformation_matrix_lag_img0 = sitk.GetImageFromArray(val_deformation_matrix_lag0)
-        val_deformation_matrix_lag_img0.SetSpacing(spacing1)
-        val_deformation_matrix_lag_img0.SetOrigin(origin1)
-        val_deformation_matrix_lag_img0.SetDirection(direction1)
-        sitk.WriteImage(val_deformation_matrix_lag_img0, os.path.join(tgt_root3, 'deformation_matrix_x.nii.gz'))
-
-        val_deformation_matrix_lag_img1 = sitk.GetImageFromArray(val_deformation_matrix_lag1)
-        val_deformation_matrix_lag_img1.SetSpacing(spacing1)
-        val_deformation_matrix_lag_img1.SetOrigin(origin1)
-        val_deformation_matrix_lag_img1.SetDirection(direction1)
-        sitk.WriteImage(val_deformation_matrix_lag_img1, os.path.join(tgt_root3, 'deformation_matrix_y.nii.gz'))
-
-        print('finish: ' + str(i))
-
-
+        
 
 
 if __name__ == '__main__':
-    # data loader
-    test_dataset = '/home/DeepTag/data/Motion_tracking_20200610/val1_reverse/Cardiac_ME_test_config.json'
-    np_data_root = '/home/DeepTag/data/Motion_tracking_20200610/val1_reverse/np_data'
 
-    if not os.path.exists(np_data_root):
-        os.mkdir(np_data_root)
-        add_np_data(project_data_config_files=test_dataset, data_type='validation', model_root=np_data_root)
-
+    data_dir = './cardiac_tagging_motion_estimation/data/'
+ 
     # proposed model
-    vol_size = (192, 192)
+    vol_size = (256, 256)
     nf_enc = [16, 32, 32, 32]
     nf_dec = [32, 32, 32, 32, 16, 3]
     net = Lagrangian_motion_estimate_net(vol_size, nf_enc, nf_dec)
 
-    test_model_path = '/home/DeepTag/models/cardiac_ME/DeepTag_Lag'
-    dst_root = '/home/DeepTag/data/Motion_tracking_20200610/tagging_analysis/test_results/'
+    test_model_path = './cardiac_tagging_motion_estimation/model/my'
+    dst_root = './cardiac_tagging_motion_estimation/results/'
     if not os.path.exists(dst_root): os.mkdir(dst_root)
     test_Cardiac_Tagging_ME_net(net=net,
-                             np_data_root=np_data_root,
-                             val_dataset_files=test_dataset,
+                             data_dir=data_dir,
                              model_path= test_model_path,
                              dst_root=dst_root,
                              case = 'proposed')
