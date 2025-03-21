@@ -17,6 +17,8 @@ import numpy as np
 from data_set.load_data_for_cine_ME import add_np_data, get_np_data_as_groupids,load_np_datagroups, DataType, \
     load_Dataset
 
+from data.preprocess_my import preprocess_tensors
+
 # device configuration
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print("Using device: ", device)
@@ -41,19 +43,43 @@ def train_Cardiac_Tagging_ME_net(net, \
 
     # load training data
 
-    train_set = 'dataset_train_100.npz'
-    train_tags = np.load(os.path.join(data_dir,train_set))['arr_0']
-    train_dataset = load_Dataset(train_tags)
+    print("Loading training data...")
+
+    train_set = 'dataset_train_1000.npz'
+    train_images = np.load(os.path.join(data_dir,train_set))['images']
+    train_points = np.load(os.path.join(data_dir,train_set))['points']
+
+    train_images = torch.tensor(train_images)
+    train_points = torch.tensor(train_points)
+    
+    print("Preprocessing training data...")
+
+    train_images, train_points = preprocess_tensors(train_images, train_points, crop=True)
+
+    train_dataset = load_Dataset(train_images)
     training_set_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
 
-    val_set = 'dataset_test_80.npz'
-    val_tags = np.load(os.path.join(data_dir,val_set))['arr_0']
-    val_dataset = load_Dataset(val_tags)
+    print("Loading validation data...")
+
+    val_set = 'dataset_val_100.npz'
+    val_images = np.load(os.path.join(data_dir,val_set))['images']
+    val_points = np.load(os.path.join(data_dir,val_set))['points']
+
+    val_images = torch.tensor(val_images)
+    val_points = torch.tensor(val_points)
+
+    print("Preprocessing validation data...")
+
+    val_images, val_points = preprocess_tensors(val_images, val_points, crop=True)
+
+    val_dataset = load_Dataset(val_images)
     val_batch_size = 1
     val_set_loader = torch.utils.data.DataLoader(dataset=val_dataset, batch_size=val_batch_size, shuffle=False)
 
     train_loss_dict = []
     val_loss_dict = []
+
+    print("Training the model...")
 
     epoch_loss = 0
     for epoch in range(n_epochs):
@@ -64,15 +90,15 @@ def train_Cardiac_Tagging_ME_net(net, \
         train_n_batches = len(training_set_loader)
         batch_loss = 0
         for i, batch in enumerate(training_set_loader):
-            tag0 = batch
-            tag = tag0[:, 2:, ::] # no grid frame
+            tag = batch
+            #tag = tag0[:, 2:, ::] # no grid frame
 
             tag = tag.to(device)
             img = tag.cuda()
             img = img.float()
 
             x = img[:, 1:, ::]  # other frames except the 1st frame
-            y = img[:, 0:17, ::]  # 1st frame also is the reference frame
+            y = img[:, 0:19, ::]  # 1st frame also is the reference frame
             shape = x.shape  # batch_size, seq_length, height, width
             batch_size = shape[0]
             seq_length = shape[1]
@@ -110,7 +136,7 @@ def train_Cardiac_Tagging_ME_net(net, \
         np.savetxt(os.path.join(model_path, 'train_loss.txt'), train_loss_dict, fmt='%.6f')
         print("training loss: {:.6f} ".format(epoch_loss))
 
-        if (epoch) % 1 == 0:
+        if (epoch) % 10 == 0:
             torch.save(net.state_dict(),
                        os.path.join(model_path, '{:d}_{:.4f}_model.pth'.format((epoch), epoch_loss)))
 
@@ -174,7 +200,7 @@ if __name__ == '__main__':
 
     if not os.path.exists(training_model_path):
         os.mkdir(training_model_path)
-    n_epochs = 10
+    n_epochs = 100
     learning_rate = 5e-4
     batch_size = 1
     print("......HYPER-PARAMETERS 4 TRAINING......")
@@ -183,7 +209,7 @@ if __name__ == '__main__':
     print("." * 30)
 
     # proposed model
-    vol_size = (256, 256)
+    vol_size = (128, 128)
     nf_enc = [16, 32, 32, 32]
     nf_dec = [32, 32, 32, 32, 16, 3]
     net = Lagrangian_motion_estimate_net(vol_size, nf_enc, nf_dec)
