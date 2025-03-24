@@ -113,7 +113,7 @@ def train_Cardiac_Tagging_ME_net(net, \
             optimizer.zero_grad()
             # forward pass, backward pass and optimization
             registered_cine1, registered_cine2, registered_cine1_lag, flow_param,  \
-            deformation_matrix, deformation_matrix_neg, deformation_matrix_lag = net(y, x)
+            deformation_matrix, deformation_matrix_neg, deformation_matrix_lag = net(y, x) # y is source, x is target
 
             train_smoothing_loss = smoothing_loss(deformation_matrix)
             train_smoothing_loss_neg = smoothing_loss(deformation_matrix_neg)

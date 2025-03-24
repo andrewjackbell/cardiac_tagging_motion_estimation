@@ -12,6 +12,7 @@ sys.path.append(root_dir)
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from torch.nn.functional import grid_sample
 
 from data.preprocess_my import preprocess_tensors
 
@@ -71,10 +72,12 @@ def test_Cardiac_Tagging_ME_net(net, \
     ME_model = ME_model.to(device)
     ME_model.eval()
 
+    errors = []
+
     for i, data in enumerate(test_set_loader):
         # cine0, tag = dataB
         tagged_cine = data
-        points_tensor = test_points[i]
+        points_tensor = test_points[i].to(device)
 
         # wrap input data in a Variable object
         cine0 = tagged_cine.to(device)
@@ -108,88 +111,59 @@ def test_Cardiac_Tagging_ME_net(net, \
             val_registered_cine1, val_registered_cine2, val_registered_cine_lag, val_flow_param, \
             val_deformation_matrix, val_deformation_matrix_neg, val_deformation_matrix_lag = net(y, x)
 
-        # visualise the results
+        # warp the points using the lagrangian flow
 
-        """print("Shapes:")
-        print("val_registered_cine1: ", val_registered_cine1.shape) # [frames, 1, H, W]
-        print("val_registered_cine2: ", val_registered_cine2.shape) # [frames, 1, H, W]
-        print("val_registered_cine_lag: ", val_registered_cine_lag.shape) # [frames, 1, H, W]
-        print("val_flow_param: ", val_flow_param.shape) # [frames, 4, H, W]
-        print("val_deformation_matrix: ", val_deformation_matrix.shape) # [frames, 2, H, W]
-        print("val_deformation_matrix_neg: ", val_deformation_matrix_neg.shape) # [frames, 2, H, W]
-        print("val_deformation_matrix_lag: ", val_deformation_matrix_lag.shape) # [frames, 2, H, W]"""
+        flow = val_deformation_matrix_lag
+        es_flow = flow[5]
 
+        ed_points = points_tensor[0]
+        ed_points_pixel = (ed_points +1) * 128/2
+        es_gt_points = points_tensor[5]
+        es_gt_points_pixel = (es_gt_points +1) * 128/2
 
+    
+        grid = ed_points # shape [N, 2]
+        grid = grid.view(1, -1, 1, 2)  # Reshape for grid_sample: [1, N, 1, 2]
 
+        sampled_flow_pixel = grid_sample(
+            es_flow.unsqueeze(0),  # [1, 2, H, W]
+            grid,
+            mode='bilinear',
+            padding_mode='border',  
+            align_corners=True
+        ).squeeze().T  # [N, 2]
 
-        # warp the first frame by the 6th frame lagrangian deformation field to yield predicted 6th frame
+        es_pred_points_pixel = ed_points_pixel + sampled_flow_pixel
 
-        from torch.nn.functional import grid_sample
-
-        # first frame points
-        first_frame_points = points_tensor[0]
-        print(first_frame_points.shape) # 168,2
-
-        first_frame_points = first_frame_points.unsqueeze(0) # add batch dim
-        first_frame_points = first_frame_points.unsqueeze(2) # add fake width dim
-
-        print(first_frame_points.shape) # 1,168,1,2 (THIS WILL BE THE GRID)
-        
-        # lagrangian deformation field at the 6th frame (ED)
-
-        deformation_field = val_deformation_matrix_neg[0]
-        print(deformation_field.shape) # 2,128,128 (THIS WILL BE THE INPUT)
-        deformation_field = deformation_field.unsqueeze(0) # add batch dim # 1,2,128,128
-
-        # normalize the deformation field to [-1, 1]
-        deformation_field = deformation_field / 128.0
-        deformation_field = deformation_field *2 - 1
-
-        output = grid_sample(deformation_field.cpu(), first_frame_points.cpu(), mode='bilinear', padding_mode='zeros')
-        print(output.shape) # 1,2,168,1
-
-        output = output.squeeze(0) # remove batch dim
-        output = output.squeeze(2) # remove fake width dim
-
-        print(output.shape) # 168,2
-
-      
-        # plot the points
-        plt.scatter(output[:,0], output[:,1], c='r', s=10)
-        plt.show()
-
-        """# warp the points by the estimated deformation field 
-
-        points_warped = torch.zeros_like(points_tensor)
-        
-        points_imspace = ((points_tensor + 1) / 2) * 128
-        points_imspace = points_imspace.int()
-
-        reference_frame = 0
-        for j in range(val_deformation_matrix_lag.shape[0]):
-            for k in range(points_imspace.shape[1]):
-                ref_x = points_imspace[reference_frame, k, 0]
-                ref_y = points_imspace[reference_frame, k, 1]
-
-                def_x = val_deformation_matrix_lag[j, 0, ref_y, ref_x]
-                def_y = val_deformation_matrix_lag[j, 1, ref_y, ref_x]
-
-                points_warped[j, k, 0] = ref_x + def_x
-                points_warped[j, k, 1] = ref_y + def_y
+        rmse = torch.sqrt(torch.mean((es_gt_points_pixel - es_pred_points_pixel) ** 2))
+        errors.append(rmse.item())
 
 
-        # show the warped points on the cine, alongside the ground truth points
+    print(f"Mean RMSE: {np.mean(errors)}") 
+    print(f"Max RMSE: {np.max(errors)}")
+    print(f"Min RMSE: {np.min(errors)}")
 
-        for j in range(points_warped.shape[0]): # j frames
-            fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-            ax.imshow(tagged_cine[0, j, :, :].cpu().numpy(), cmap='gray')
-            ax.scatter(points_imspace[j, :, 0], points_imspace[j, :, 1], c='r', s=10, label='GT')
-            ax.scatter(points_warped[j, :, 0], points_warped[j, :, 1], c='b', s=10, label='Warped')
-            ax.legend()
+    # on the last iteration, convert and plot
+    ed_frame = tagged_cine[0, 0, :, :].cpu().numpy()
+    es_frame = tagged_cine[0, 5, :, :].cpu().numpy()
+    es_pred_points_pixel = es_pred_points_pixel.cpu().numpy()
+    ed_points_pixel = ed_points_pixel.cpu().numpy()
+    es_gt_points_pixel = es_gt_points_pixel.cpu().numpy()
 
 
-            plt.show()"""
-
+    plt.subplot(2, 2, 1)
+    plt.imshow(ed_frame, cmap='gray')
+    plt.scatter(ed_points_pixel[:, 0], ed_points_pixel[:, 1], c='r', s=5)
+    plt.title("End-diastole")
+    plt.subplot(2, 2, 3)
+    plt.imshow(es_frame, cmap='gray')
+    plt.scatter(es_gt_points_pixel[:, 0], es_gt_points_pixel[:, 1], c='r', s=5)
+    plt.title("End-systole GT")
+    plt.subplot(2, 2, 4)
+    plt.imshow(es_frame, cmap='gray')
+    plt.scatter(es_pred_points_pixel[:, 0], es_pred_points_pixel[:, 1], c='r', s=5)
+    plt.title("End-systole Pred")
+    plt.show()
 
 if __name__ == '__main__':
 
