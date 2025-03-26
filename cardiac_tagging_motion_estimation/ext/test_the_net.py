@@ -33,6 +33,54 @@ def load_dec_weights(model, weights):
     model.load_state_dict(w_dict, strict=True)
     return model
 
+def plotting_function_grid(fig, ax, points_list, points_shape, colors, background_frames=None):
+    '''
+    Takes a single axis and plots an animation on it. 
+    The animation consists of a scatter plot of the points moving over time, with an optional background movie (sequence of images).
+
+    Parameters:
+    - fig: matplotlib figure object.
+    - ax: matplotlib axis object.
+    - points_list: List of torch tensors of shape (n_frames, n_points, 2) where the last dimension is the x and y coordinates of the points.
+    - points_shape: Tuple (u_samples, v_samples, _) representing the shape of the points grid.
+    - colors: List of colors (e.g., ['orange', 'blue', 'green']) for each set of points in points_list.
+    - background_frames: torch tensor of shape (n_frames, H, W) where H and W are the height and width of the images.
+
+    Returns the animation object, which needs to be preserved to prevent garbage collection.
+    '''
+    ims = []
+    n_frames = points_list[0].shape[0]
+    u_samples, v_samples, _ = points_shape
+
+    for i in range(n_frames):
+        all_lines = []
+        
+        for idx, points_tensor in enumerate(points_list):
+            points = points_tensor[i]
+            interval = v_samples
+            color = colors[idx]  # Get the color for this set of points
+
+            # Join up adjacent points horizontally
+            for j in range(points.shape[0] - 1):
+                if (j + 1) % interval != 0:  # Ensure not to join the last point of one interval with the first of the next
+                    line, = ax.plot(points[j:j+2, 0], points[j:j+2, 1], '-', color=color)
+                    all_lines.append(line)
+
+            # Join up adjacent points vertically
+            for j in range(points.shape[0] - interval):
+                if (j % interval) < 10:
+                    line, = ax.plot(points[j:j+interval+1:interval, 0], points[j:j+interval+1:interval, 1], '-', color=color)
+                    all_lines.append(line)
+
+        if background_frames is not None:
+            im = ax.imshow(background_frames[i], cmap='gray')
+            ims.append([im] + all_lines)
+        else:
+            ims.append(all_lines)
+
+    ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=0)
+    return ani
+
 def test_Cardiac_Tagging_ME_net(net, \
                                 data_dir, \
                                 model_path, \
@@ -88,8 +136,8 @@ def test_Cardiac_Tagging_ME_net(net, \
         img = cine0.cuda()
         img = img.float()
 
-        x = img[:, 1:, ::]  # other frames except the 1st frame
-        y = img[:, 0:19, ::]  # 1st frame also is the reference frame
+        x = img[:, 3:, ::]  # other frames except the 1st frame
+        y = img[:, 2:19, ::]  # 1st frame also is the reference frame
         shape = x.shape  # batch_size, seq_length, height, width
         seq_length = shape[1]
         height = shape[2]
@@ -113,57 +161,12 @@ def test_Cardiac_Tagging_ME_net(net, \
 
         # warp the points using the lagrangian flow
 
-        flow = val_deformation_matrix_lag
-        es_flow = flow[5]
-
-        ed_points = points_tensor[0]
-        ed_points_pixel = (ed_points +1) * 128/2
-        es_gt_points = points_tensor[5]
-        es_gt_points_pixel = (es_gt_points +1) * 128/2
 
     
-        grid = ed_points # shape [N, 2]
-        grid = grid.view(1, -1, 1, 2)  # Reshape for grid_sample: [1, N, 1, 2]
-
-        sampled_flow_pixel = grid_sample(
-            es_flow.unsqueeze(0),  # [1, 2, H, W]
-            grid,
-            mode='bilinear',
-            padding_mode='border',  
-            align_corners=True
-        ).squeeze().T  # [N, 2]
-
-        es_pred_points_pixel = ed_points_pixel + sampled_flow_pixel
-
-        rmse = torch.sqrt(torch.mean((es_gt_points_pixel - es_pred_points_pixel) ** 2))
-        errors.append(rmse.item())
 
 
-    print(f"Mean RMSE: {np.mean(errors)}") 
-    print(f"Max RMSE: {np.max(errors)}")
-    print(f"Min RMSE: {np.min(errors)}")
 
-    # on the last iteration, convert and plot
-    ed_frame = tagged_cine[0, 0, :, :].cpu().numpy()
-    es_frame = tagged_cine[0, 5, :, :].cpu().numpy()
-    es_pred_points_pixel = es_pred_points_pixel.cpu().numpy()
-    ed_points_pixel = ed_points_pixel.cpu().numpy()
-    es_gt_points_pixel = es_gt_points_pixel.cpu().numpy()
-
-
-    plt.subplot(2, 2, 1)
-    plt.imshow(ed_frame, cmap='gray')
-    plt.scatter(ed_points_pixel[:, 0], ed_points_pixel[:, 1], c='r', s=5)
-    plt.title("End-diastole")
-    plt.subplot(2, 2, 3)
-    plt.imshow(es_frame, cmap='gray')
-    plt.scatter(es_gt_points_pixel[:, 0], es_gt_points_pixel[:, 1], c='r', s=5)
-    plt.title("End-systole GT")
-    plt.subplot(2, 2, 4)
-    plt.imshow(es_frame, cmap='gray')
-    plt.scatter(es_pred_points_pixel[:, 0], es_pred_points_pixel[:, 1], c='r', s=5)
-    plt.title("End-systole Pred")
-    plt.show()
+    
 
 if __name__ == '__main__':
 

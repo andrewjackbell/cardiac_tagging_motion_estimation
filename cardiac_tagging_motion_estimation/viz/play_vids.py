@@ -70,7 +70,15 @@ def play_videos(tensors, image_types, fps=30):
             
             grid_frame = np.vstack(rows)  # Stack vertically
             
-            cv2.imshow("Cine Image Playback (Press 'q' to exit)", grid_frame)
+            # Scale the frame
+            scale_factor = 3  # Adjust as needed
+            grid_frame = cv2.resize(grid_frame, (grid_frame.shape[1] * scale_factor, grid_frame.shape[0] * scale_factor), interpolation=cv2.INTER_NEAREST)
+
+            # Resize OpenCV window
+            cv2.namedWindow("Cine Image Playback", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Cine Image Playback", 800, 800)
+
+            cv2.imshow("Cine Image Playback", grid_frame)
             if cv2.waitKey(int(1000 / fps)) & 0xFF == ord('q'):
                 cv2.destroyAllWindows()
                 return  # Exit

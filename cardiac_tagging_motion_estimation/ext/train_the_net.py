@@ -1,5 +1,8 @@
 import sys
 import os, time
+import numpy as np
+import matplotlib.pyplot as plt
+import torch    
 
 # Get absolute paths
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -97,8 +100,8 @@ def train_Cardiac_Tagging_ME_net(net, \
             img = tag.cuda()
             img = img.float()
 
-            x = img[:, 1:, ::]  # other frames except the 1st frame
-            y = img[:, 0:19, ::]  # 1st frame also is the reference frame
+            x = img[:, 3:, ::]  # other frames except the 1st frame
+            y = img[:, 2:19, ::]  # 1st frame also is the reference frame
             shape = x.shape  # batch_size, seq_length, height, width
             batch_size = shape[0]
             seq_length = shape[1]
