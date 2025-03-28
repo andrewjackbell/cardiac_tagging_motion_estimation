@@ -59,7 +59,7 @@ def warp_image(image, flow):
     return output
     
 
-def warp_points(points, flow):
+def warp_points(points, flow, device="cpu"):
     """
     Warp points using flow field
     :param points: points to warp - shape should be (B, N_points, 2)
@@ -73,7 +73,7 @@ def warp_points(points, flow):
     origin_locations = torch.meshgrid([torch.arange(0, s) for s in (h, w)])
     origin_locations = torch.stack(origin_locations)  # 
     origin_locations = torch.unsqueeze(origin_locations, 0)  # add batch
-    origin_locations = origin_locations.type(torch.FloatTensor)
+    origin_locations = origin_locations.type(torch.FloatTensor).to(device)
 
     new_locations = origin_locations - flow # shape (B, 2, H, W) 
     new_locations_norm = normalise_coords(new_locations, w, range="-1-1") # shape (B, 2, H, W)
@@ -83,9 +83,9 @@ def warp_points(points, flow):
 
     points_t = points.unsqueeze(2) # shape (B, N_points, 1, 2)
 
-    output = f.grid_sample(input=new_locations_flipped, grid=points_t, mode='bilinear') # shape (B, N_points, 1, 2)
+    output = f.grid_sample(input=new_locations_flipped, grid=points_t, mode='bilinear') # shape (B, 2, N_points, 1)
 
-    output = output.squeeze(2) # shape (B, N_points, 2)
+    output = output.squeeze(3).permute(0, 2, 1) # shape (B, N_points, 2)
 
     output_denorm = denormalise_coords(output, w, range="-1-1") # shape (B, N_points, 2)
 

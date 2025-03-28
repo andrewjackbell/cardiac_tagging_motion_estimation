@@ -22,6 +22,7 @@ from ME_nets.LagrangianMotionEstimationNet import SpatialTransformer
 from data_set.load_data_for_cine_ME import add_np_data, get_np_data_as_groupids,load_np_datagroups, DataType, \
     load_Dataset
 import SimpleITK as sitk
+from ext.warping import warp_image, warp_points, normalise_coords, denormalise_coords
 
 
 # device configuration
@@ -121,45 +122,79 @@ def test_Cardiac_Tagging_ME_net(net, \
     ME_model.eval()
 
     errors = []
+    es_errors = []
 
     for i, data in enumerate(test_set_loader):
-        # cine0, tag = dataB
-        tagged_cine = data
-        points_tensor = test_points[i].to(device)
+        # cine0, tag = data
 
-        # wrap input data in a Variable object
-        cine0 = tagged_cine.to(device)
+        tagged_cine = data.to(device).float()
+        points_tensor = test_points[i].unsqueeze(0).to(device)
+        tagged_cine_short = tagged_cine[:, 2:, ::]  # remove the first two frames
+        points_tensor_short = points_tensor[:, 2:, ::]  # remove the first two frames
 
-        #cine1 = tagged_cine[:, 2:, ::]  # no grid frame
-
-        # wrap input data in a Variable object
-        img = cine0.cuda()
-        img = img.float()
-
-        x = img[:, 3:, ::]  # other frames except the 1st frame
-        y = img[:, 2:19, ::]  # 1st frame also is the reference frame
+        x = tagged_cine[:, 3:, ::]  # other frames except the 1st frame
+        y = tagged_cine[:, 2:19, ::]  # 1st frame also is the reference frame
         shape = x.shape  # batch_size, seq_length, height, width
         seq_length = shape[1]
         height = shape[2]
         width = shape[3]
         x = x.contiguous()
         x = x.view(-1, 1, height, width)  # batch_size * seq_length, channels=1, height, width
-
-        # y = y.repeat(1, seq_length, 1, 1)  # repeat the ES frame to match other frames contained in a Cine
         y = y.contiguous()
         y = y.view(-1, 1, height, width)  # batch_size * seq_length, channels=1, height, width
-
-        z = cine0[:, 0:1, ::]  # Tag grid frame also is the reference frame
-        z = z.repeat(1, seq_length, 1, 1)  # repeat the ES frame to match other frames contained in a Cine
-        z = z.contiguous()
-        z = z.view(-1, 1, height, width)  # batch_size * seq_length, channels=1, height, width
 
         # forward pass
         with torch.no_grad():
             val_registered_cine1, val_registered_cine2, val_registered_cine_lag, val_flow_param, \
             val_deformation_matrix, val_deformation_matrix_neg, val_deformation_matrix_lag = net(y, x)
 
+
+        es_frame_n = 5
         # warp the points using the lagrangian flow
+
+
+        
+        ed_points = points_tensor_short[:, 0, ::]
+        es_flow = val_deformation_matrix_lag[es_frame_n, ::].unsqueeze(0)
+
+
+        points_short_denorm = denormalise_coords(points_tensor_short, width, range="-1-1").to('cpu')
+
+        warped_points = warp_points(ed_points, es_flow, device=device).to('cpu').numpy()
+
+        ed_gt = points_short_denorm[0, 0, ::].numpy()
+        es_gt = points_short_denorm[0, es_frame_n, ::].numpy()
+
+        plt.figure()
+        plt.scatter(ed_gt[:, 0], ed_gt[:, 1], c='blue', label='Original Points')
+        plt.scatter(warped_points[0, :, 0], warped_points[0, :, 1], c='red', label='Warped Points')
+        plt.scatter(es_gt[:, 0], es_gt[:, 1], c='yellow', label='GT ES Points')
+        plt.legend()
+        plt.title('Original and Warped Points')
+        plt.show()
+
+
+
+
+    """ fig, axs = plt.subplots(1, 2, figsize=(10, 10))
+
+
+
+    ani1 = plotting_function_grid(fig, axs[0], [points_tensor_matched_denorm.to('cpu')], (7, 7, 17), ['blue'], background_frames=tagged_cine.squeeze()[2:19].numpy())
+    axs[0].set_title('Original Points')
+    axs[0].axis('off')
+
+    ani2 = plotting_function_grid(fig, axs[1], [torch.tensor(warped_points)], (7, 7, 17), ['blue'], background_frames=tagged_cine.squeeze()[2:19].numpy())
+
+    axs[1].set_title('Warped Points')
+    axs[1].axis('off')
+
+    ani1.save(os.path.join(dst_root, 'original_points.gif'), writer='pillow', fps=10)
+    ani2.save(os.path.join(dst_root, 'warped_points.gif'), writer='pillow', fps=10)
+    plt.show()
+    plt.close(fig)"""
+
+
 
 
     
