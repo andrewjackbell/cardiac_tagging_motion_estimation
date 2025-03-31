@@ -39,52 +39,70 @@ def load_dec_weights(model, weights):
     model.load_state_dict(w_dict, strict=True)
     return model
 
-def plotting_function_grid(fig, ax, points_list, points_shape, colors, background_frames=None):
-    '''
-    Takes a single axis and plots an animation on it. 
-    The animation consists of a scatter plot of the points moving over time, with an optional background movie (sequence of images).
 
-    Parameters:
-    - fig: matplotlib figure object.
-    - ax: matplotlib axis object.
-    - points_list: List of torch tensors of shape (n_frames, n_points, 2) where the last dimension is the x and y coordinates of the points.
-    - points_shape: Tuple (u_samples, v_samples, _) representing the shape of the points grid.
-    - colors: List of colors (e.g., ['orange', 'blue', 'green']) for each set of points in points_list.
-    - background_frames: torch tensor of shape (n_frames, H, W) where H and W are the height and width of the images.
-
-    Returns the animation object, which needs to be preserved to prevent garbage collection.
-    '''
-    ims = []
-    n_frames = points_list[0].shape[0]
-    u_samples, v_samples, _ = points_shape
-
-    for i in range(n_frames):
-        all_lines = []
+def create_synced_animations(fig, axs, data_list, fps=5):
+    """
+    data_list: List of tuples (points_list, points_shape, colors, background_frames)
+    for each subplot
+    """
+    n_frames = data_list[0][3].shape[0]  # Get frames from first background
+    interval = 1000 // fps
+    
+    # Store all animation elements
+    all_bg_images = []
+    all_lines_by_set = []
+    
+    # Initialize each subplot
+    for ax, (points_list, points_shape, colors, background_frames) in zip(axs, data_list):
+        u_samples, v_samples, _ = points_shape
         
-        for idx, points_tensor in enumerate(points_list):
-            points = points_tensor[i]
-            interval = v_samples
-            color = colors[idx]  # Get the color for this set of points
-
-            # Join up adjacent points horizontally
-            for j in range(points.shape[0] - 1):
-                if (j + 1) % interval != 0:  # Ensure not to join the last point of one interval with the first of the next
-                    line, = ax.plot(points[j:j+2, 0], points[j:j+2, 1], '-', color=color)
-                    all_lines.append(line)
-
-            # Join up adjacent points vertically
-            for j in range(points.shape[0] - interval):
-                if (j % interval) < 10:
-                    line, = ax.plot(points[j:j+interval+1:interval, 0], points[j:j+interval+1:interval, 1], '-', color=color)
-                    all_lines.append(line)
-
-        if background_frames is not None:
-            im = ax.imshow(background_frames[i], cmap='gray')
-            ims.append([im] + all_lines)
-        else:
-            ims.append(all_lines)
-
-    ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=0)
+        # Pre-calculate indices
+        h_indices = [(j, j+1) for j in range(points_list[0].shape[1] - 1) 
+                     if (j + 1) % v_samples != 0]
+        v_indices = [(j, j+v_samples) for j in range(points_list[0].shape[1] - v_samples) 
+                     if (j % v_samples) < 10]
+        
+        # Setup background
+        bg_image = ax.imshow(background_frames[0], cmap='gray', zorder=0)
+        all_bg_images.append(bg_image)
+        
+        # Setup lines
+        subplot_lines = []
+        for idx, _ in enumerate(points_list):
+            h_lines = [ax.plot([], [], '-', color=colors[idx], zorder=1)[0] 
+                      for _ in range(len(h_indices))]
+            v_lines = [ax.plot([], [], '-', color=colors[idx], zorder=1)[0] 
+                      for _ in range(len(v_indices))]
+            subplot_lines.append((h_lines, v_lines, h_indices, v_indices))
+        all_lines_by_set.append((points_list, subplot_lines))
+    
+    def update(frame):
+        all_artists = []
+        
+        # Update each subplot
+        for idx, ((points_list, subplot_lines), bg_image) in enumerate(zip(all_lines_by_set, all_bg_images)):
+            # Update background
+            bg_image.set_array(data_list[idx][3][frame])
+            all_artists.append(bg_image)
+            
+            # Update lines
+            for points_tensor, (h_lines, v_lines, h_indices, v_indices) in zip(points_list, subplot_lines):
+                points = points_tensor[frame]
+                
+                for line, (i, j) in zip(h_lines, h_indices):
+                    line.set_data([points[i, 0], points[j, 0]], 
+                                [points[i, 1], points[j, 1]])
+                    all_artists.append(line)
+                
+                for line, (i, j) in zip(v_lines, v_indices):
+                    line.set_data([points[i, 0], points[j, 0]], 
+                                [points[i, 1], points[j, 1]])
+                    all_artists.append(line)
+        
+        return all_artists
+    
+    ani = animation.FuncAnimation(fig, update, frames=n_frames,
+                                interval=interval, blit=True)
     return ani
 
 def test_Cardiac_Tagging_ME_net(net, \
@@ -125,7 +143,7 @@ def test_Cardiac_Tagging_ME_net(net, \
     test_set_loader = torch.utils.data.DataLoader(dataset=val_dataset, batch_size=val_batch_size, shuffle=False)
     if not os.path.exists(dst_root): os.makedirs(dst_root)
     
-    model = 'end_model.pth'
+    model = 'model_newish_40.pth'
 
     ME_model = load_dec_weights(net, model_path + model)
     ME_model = ME_model.to(device)
@@ -133,6 +151,7 @@ def test_Cardiac_Tagging_ME_net(net, \
 
     errors = []
     es_errors = []
+    predictions = []
 
     for i, data in enumerate(test_set_loader):
         # cine0, tag = data
@@ -164,38 +183,68 @@ def test_Cardiac_Tagging_ME_net(net, \
         ed_points_repeat = points_tensor_short[:, 0, ::].repeat(seq_length, 1, 1)
         warped_points_all = warp_points(ed_points_repeat, val_deformation_matrix_lag, device=device)
         warped_points_es = warped_points_all[es_flow_index].cpu()
+
+        predictions.append(warped_points_all)
         
 
         points_short_denorm = denormalise_coords(points_tensor_short, width, range="-1-1").cpu()
-        ed_gt = points_short_denorm[0, 0, ::].numpy()
+        ed_gt = points_short_denorm[0, 0, ::]
         es_gt = points_short_denorm[0, es_frame_index, ::].numpy()
 
-        mse = np.mean((warped_points_es.numpy() - es_gt) ** 2)
-        es_errors.append(mse)
-
-        plt.figure()
-
-        """plt.scatter(warped_points_es[:, 0], warped_points_es[:, 1], c='r', label='Predicted')
-        plt.scatter(es_gt[:, 0], es_gt[:, 1], c='b', label='Ground Truth')
-        plt.title(f'Predicted vs Ground Truth Points for case {cases[i]} slice {slices[i]}, es_frame {es_frame_n}')
-        plt.legend()
-        plt.show()"""
+        #rmse = torch.sqrt(torch.mean((warped_points_es - es_gt) ** 2))
+        rmse = torch.sqrt(torch.mean((warped_points_es - es_gt) ** 2))
+        
+        es_errors.append(rmse)
 
 
+    def prepare_case_data(case_idx, val_dataset, predictions, test_points, width):
+        """Helper function to prepare data for a single case"""
+        cine = val_dataset[case_idx][1:]
+        predicted_points = predictions[case_idx]
+        gt_points = test_points[case_idx][1:]
+        gt_points_denorm = denormalise_coords(gt_points, width, range="-1-1").cpu()
+        
+        return (
+            [gt_points_denorm.squeeze().to('cpu'), predicted_points.cpu()],  # points_list
+            (7, 7, 17),  # points_shape
+            ['green', 'blue'],  # colors
+            cine.squeeze().cpu()  # background_frames
+        )
 
-
-    """    fig, axs = plt.subplots(1, 2, figsize=(10, 10))
-    ani1 = plotting_function_grid(fig, axs[0], [points_short_denorm.squeeze()[:-1].to('cpu'),torch.tensor(warped_points_all).cpu()], (7, 7, 17), ['green', 'blue'], background_frames=tagged_cine_short.squeeze().cpu())
-    axs[0].set_title('Original Points')
-    axs[0].axis('off')
-    plt.show()
-    plt.close(fig)"""
-
+    # Calculate statistics
     mean_errors = np.mean(es_errors)
+    sdev_errors = np.std(es_errors)
     print(f"Mean error: {mean_errors}")
+    print(f"Standard deviation of errors: {sdev_errors}")
 
+    # Select cases
+    cases = {
+        'Worst': np.argmax(es_errors),
+        'Best': np.argmin(es_errors),
+        'Average': np.argsort(es_errors)[len(es_errors)//2],
+        'Random': np.random.randint(len(es_errors))
+    }
 
+    # Create figure
+    fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+    axs = axs.flatten()
 
+    # Prepare data for all cases
+    data_list = [
+        prepare_case_data(case_idx, val_dataset, predictions, test_points, width)
+        for case_idx in cases.values()
+    ]
+
+    # Create synced animations
+    ani = create_synced_animations(fig, axs, data_list, fps=30)
+
+    # Set titles
+    for ax, (case_name, case_idx) in zip(axs, cases.items()):
+        ax.set_title(f'{case_name} Case, green=GT, blue=Predicted\nRMSE: {es_errors[case_idx]:.2f}')
+        ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == '__main__':
 

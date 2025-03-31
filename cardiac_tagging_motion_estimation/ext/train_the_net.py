@@ -94,14 +94,12 @@ def train_Cardiac_Tagging_ME_net(net, \
         batch_loss = 0
         for i, batch in enumerate(training_set_loader):
             tag = batch
-            #tag = tag0[:, 2:, ::] # no grid frame
-
             tag = tag.to(device)
             img = tag.cuda()
             img = img.float()
 
-            x = img[:, 3:, ::]  # other frames except the 1st frame
-            y = img[:, 2:19, ::]  # 1st frame also is the reference frame
+            x = img[:, 1:, ::]  # other frames except the 1st frame
+            y = img[:, :19, ::]  # 1st frame also is the reference frame
             shape = x.shape  # batch_size, seq_length, height, width
             batch_size = shape[0]
             seq_length = shape[1]
@@ -139,17 +137,16 @@ def train_Cardiac_Tagging_ME_net(net, \
         np.savetxt(os.path.join(model_path, 'train_loss.txt'), train_loss_dict, fmt='%.6f')
         print("training loss: {:.6f} ".format(epoch_loss))
 
-        if (epoch) % 10 == 0:
-            torch.save(net.state_dict(),
-                       os.path.join(model_path, '{:d}_{:.4f}_model.pth'.format((epoch), epoch_loss)))
-
+        """        if (epoch) % 10 == 0:
+                    torch.save(net.state_dict(),
+                            os.path.join(model_path, '{:d}_{:.4f}_model.pth'.format((epoch), epoch_loss)))
+        """
         # when the epoch is over do a pass on the validation set
         total_val_loss = 0
         val_n_batches = len(val_set_loader)
 
         for i, batch in enumerate(val_set_loader):
             tag0 = batch
-            tag = tag0[:, 2:, ::]  # no grid frame
             val_batch_num_0 = tag0.shape
             val_batch_num = val_batch_num_0[0]
             tag = tag.to(device)
@@ -157,7 +154,7 @@ def train_Cardiac_Tagging_ME_net(net, \
             img = img.float()
 
             x = img[:, 1:, ::]  # other frames except the 1st frame
-            y = img[:, 0:17, ::]  # 1st frame also is the reference frame
+            y = img[:, :19, ::]  # 1st frame also is the reference frame
             shape = x.shape  # batch_size, seq_length, height, width
             batch_size = shape[0]
             seq_length = shape[1]
@@ -192,7 +189,7 @@ def train_Cardiac_Tagging_ME_net(net, \
 
         print("validation loss: {:.6f} ".format(val_epoch_loss))
 
-    torch.save(net.state_dict(), os.path.join(model_path, 'end_model.pth'))
+    torch.save(net.state_dict(), os.path.join(model_path, 'model_newish_40.pth'))
     print("Training finished! It took {:.2f}s".format(time.time() - training_start_time))
 
 
@@ -203,7 +200,7 @@ if __name__ == '__main__':
 
     if not os.path.exists(training_model_path):
         os.mkdir(training_model_path)
-    n_epochs = 100
+    n_epochs = 40
     learning_rate = 5e-4
     batch_size = 1
     print("......HYPER-PARAMETERS 4 TRAINING......")
