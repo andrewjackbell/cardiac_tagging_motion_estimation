@@ -24,6 +24,11 @@ from data_set.load_data_for_cine_ME import add_np_data, get_np_data_as_groupids,
 import SimpleITK as sitk
 from ext.warping import warp_image, warp_points, normalise_coords, denormalise_coords
 
+# seeding
+torch.manual_seed(0)
+np.random.seed(0)
+
+
 
 # device configuration
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -90,8 +95,13 @@ def test_Cardiac_Tagging_ME_net(net, \
 
     dataset_name = 'dataset_test_100.npz'
 
-    test_images = np.load(os.path.join(data_dir,dataset_name))['images']
-    test_points = np.load(os.path.join(data_dir,dataset_name))['points']
+    dataset = np.load(os.path.join(data_dir,dataset_name))
+
+    test_images = dataset['images']
+    test_points = dataset['points']
+    cases = dataset['case']
+    slices = dataset['slice']
+    es_frame_numbers = dataset['es_frame']
 
     test_images = torch.tensor(test_images)
     test_points = torch.tensor(test_points)
@@ -129,11 +139,14 @@ def test_Cardiac_Tagging_ME_net(net, \
 
         tagged_cine = data.to(device).float()
         points_tensor = test_points[i].unsqueeze(0).to(device)
-        tagged_cine_short = tagged_cine[:, 2:, ::]  # remove the first two frames
-        points_tensor_short = points_tensor[:, 2:, ::]  # remove the first two frames
+        tagged_cine_short = tagged_cine[:, :, ::]  # remove the first two frames
+        points_tensor_short = points_tensor[:, :, ::]  # remove the first two frames
+        es_frame_n = es_frame_numbers[i]
+        es_frame_index = es_frame_n - 1 
+        es_flow_index = es_frame_n - 2
 
-        x = tagged_cine[:, 3:, ::]  # other frames except the 1st frame
-        y = tagged_cine[:, 2:19, ::]  # 1st frame also is the reference frame
+        x = tagged_cine[:, 1:, ::]  # other frames except the 1st frame
+        y = tagged_cine[:, :19, ::]  # 1st frame also is the reference frame
         shape = x.shape  # batch_size, seq_length, height, width
         seq_length = shape[1]
         height = shape[2]
@@ -148,60 +161,41 @@ def test_Cardiac_Tagging_ME_net(net, \
             val_registered_cine1, val_registered_cine2, val_registered_cine_lag, val_flow_param, \
             val_deformation_matrix, val_deformation_matrix_neg, val_deformation_matrix_lag = net(y, x)
 
-
-        es_frame_n = 5
-        # warp the points using the lagrangian flow
-
-
+        ed_points_repeat = points_tensor_short[:, 0, ::].repeat(seq_length, 1, 1)
+        warped_points_all = warp_points(ed_points_repeat, val_deformation_matrix_lag, device=device)
+        warped_points_es = warped_points_all[es_flow_index].cpu()
         
-        ed_points = points_tensor_short[:, 0, ::]
-        es_flow = val_deformation_matrix_lag[es_frame_n, ::].unsqueeze(0)
 
-
-        points_short_denorm = denormalise_coords(points_tensor_short, width, range="-1-1").to('cpu')
-
-        warped_points = warp_points(ed_points, es_flow, device=device).to('cpu').numpy()
-
+        points_short_denorm = denormalise_coords(points_tensor_short, width, range="-1-1").cpu()
         ed_gt = points_short_denorm[0, 0, ::].numpy()
-        es_gt = points_short_denorm[0, es_frame_n, ::].numpy()
+        es_gt = points_short_denorm[0, es_frame_index, ::].numpy()
+
+        mse = np.mean((warped_points_es.numpy() - es_gt) ** 2)
+        es_errors.append(mse)
 
         plt.figure()
-        plt.scatter(ed_gt[:, 0], ed_gt[:, 1], c='blue', label='Original Points')
-        plt.scatter(warped_points[0, :, 0], warped_points[0, :, 1], c='red', label='Warped Points')
-        plt.scatter(es_gt[:, 0], es_gt[:, 1], c='yellow', label='GT ES Points')
+
+        """plt.scatter(warped_points_es[:, 0], warped_points_es[:, 1], c='r', label='Predicted')
+        plt.scatter(es_gt[:, 0], es_gt[:, 1], c='b', label='Ground Truth')
+        plt.title(f'Predicted vs Ground Truth Points for case {cases[i]} slice {slices[i]}, es_frame {es_frame_n}')
         plt.legend()
-        plt.title('Original and Warped Points')
-        plt.show()
+        plt.show()"""
 
 
 
 
-    """ fig, axs = plt.subplots(1, 2, figsize=(10, 10))
-
-
-
-    ani1 = plotting_function_grid(fig, axs[0], [points_tensor_matched_denorm.to('cpu')], (7, 7, 17), ['blue'], background_frames=tagged_cine.squeeze()[2:19].numpy())
+    """    fig, axs = plt.subplots(1, 2, figsize=(10, 10))
+    ani1 = plotting_function_grid(fig, axs[0], [points_short_denorm.squeeze()[:-1].to('cpu'),torch.tensor(warped_points_all).cpu()], (7, 7, 17), ['green', 'blue'], background_frames=tagged_cine_short.squeeze().cpu())
     axs[0].set_title('Original Points')
     axs[0].axis('off')
-
-    ani2 = plotting_function_grid(fig, axs[1], [torch.tensor(warped_points)], (7, 7, 17), ['blue'], background_frames=tagged_cine.squeeze()[2:19].numpy())
-
-    axs[1].set_title('Warped Points')
-    axs[1].axis('off')
-
-    ani1.save(os.path.join(dst_root, 'original_points.gif'), writer='pillow', fps=10)
-    ani2.save(os.path.join(dst_root, 'warped_points.gif'), writer='pillow', fps=10)
     plt.show()
     plt.close(fig)"""
 
+    mean_errors = np.mean(es_errors)
+    print(f"Mean error: {mean_errors}")
 
 
 
-    
-
-
-
-    
 
 if __name__ == '__main__':
 
