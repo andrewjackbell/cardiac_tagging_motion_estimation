@@ -2,6 +2,7 @@ import sys
 import os, json
 import numpy as np
 import torch
+import napari
 
 # Get absolute paths
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +39,30 @@ def load_dec_weights(model, weights):
     w_dict = torch.load(weights)
     model.load_state_dict(w_dict, strict=True)
     return model
+
+import numpy as np
+
+def reshape_points_for_napari(points):
+    """
+    Convert a (T, N, D) array into a (T*N, D+1) array for Napari, adding time as the first coordinate.
+
+    Parameters:
+        points (numpy.ndarray): Input array of shape (T, N, D), where
+                                T = number of time frames,
+                                N = number of points per frame,
+                                D = spatial dimensions (x, y, ...).
+    
+    Returns:
+        numpy.ndarray: Reshaped array of shape (T*N, D+1), where columns are (t, spatial dims...).
+    """
+    T, N, D = points.shape  # Extract dimensions
+    t_coords = np.repeat(np.arange(T)[:, np.newaxis], N, axis=1)  # Create time column
+    points_reshaped = np.column_stack((t_coords.flatten(), points.reshape(-1, D)))
+    return points_reshaped
+
+    # Example usage:
+    # points = np.random.rand(20, 168, 3) * 512  # Example input for 3D points
+    # napari_points = reshape_points_for_napari(points)
 
 
 def create_synced_animations(fig, axs, data_list, fps=5):
@@ -197,20 +222,6 @@ def test_Cardiac_Tagging_ME_net(net, \
         es_errors.append(rmse)
 
 
-    def prepare_case_data(case_idx, val_dataset, predictions, test_points, width):
-        """Helper function to prepare data for a single case"""
-        cine = val_dataset[case_idx][1:]
-        predicted_points = predictions[case_idx]
-        gt_points = test_points[case_idx][1:]
-        gt_points_denorm = denormalise_coords(gt_points, width, range="-1-1").cpu()
-        
-        return (
-            [gt_points_denorm.squeeze().to('cpu'), predicted_points.cpu()],  # points_list
-            (7, 7, 17),  # points_shape
-            ['green', 'blue'],  # colors
-            cine.squeeze().cpu()  # background_frames
-        )
-
     # Calculate statistics
     mean_errors = np.mean(es_errors)
     sdev_errors = np.std(es_errors)
@@ -225,26 +236,33 @@ def test_Cardiac_Tagging_ME_net(net, \
         'Random': np.random.randint(len(es_errors))
     }
 
-    # Create figure
-    fig, axs = plt.subplots(2, 2, figsize=(10, 10))
-    axs = axs.flatten()
+    # plot worst case
 
-    # Prepare data for all cases
-    data_list = [
-        prepare_case_data(case_idx, val_dataset, predictions, test_points, width)
-        for case_idx in cases.values()
-    ]
+    frames = val_dataset[cases['Worst']]
 
-    # Create synced animations
-    ani = create_synced_animations(fig, axs, data_list, fps=30)
+    viewer = napari.Viewer()
+    viewer.add_image(frames, name='Frames')
 
-    # Set titles
-    for ax, (case_name, case_idx) in zip(axs, cases.items()):
-        ax.set_title(f'{case_name} Case, green=GT, blue=Predicted\nRMSE: {es_errors[case_idx]:.2f}')
-        ax.axis('off')
+    points_gt = test_points[cases['Worst']].cpu().numpy()
+    points_gt = denormalise_coords(points_gt, width, range="-1-1")
+    points_gt = reshape_points_for_napari(points_gt)
 
-    plt.tight_layout()
-    plt.show()
+    viewer.add_points(points_gt, size=2, face_color='pink', name='Ground Truth')
+
+    points_pred = predictions[cases['Worst']].cpu().numpy()
+    points_pred = reshape_points_for_napari(points_pred)
+
+    viewer.add_points(points_pred, size=2, face_color='green', name='Predictions')
+
+    napari.run()
+
+
+
+
+
+
+
+
 
 if __name__ == '__main__':
 
